@@ -1,0 +1,5 @@
+# Raw OpenStreetMap downloads (about 40 MB); regenerate with tools/fetch-osm.sh
+tools/amersfoort-roads.json
+tools/amersfoort-addresses.json
+__pycache__/
+.DS_Store

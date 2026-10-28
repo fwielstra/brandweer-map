@@ -1,0 +1,1042 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Amersfoort opkomstkaart</title>
+<meta name="description" content="Interactive map of estimated fire brigade response times (opkomsttijd) in Amersfoort, based on OpenStreetMap roads.">
+<style>
+/* Fonts are self-hosted (SIL Open Font License, see fonts/). */
+@font-face { font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 500; font-display: swap; src: url("fonts/barlow-semi-condensed-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 600; font-display: swap; src: url("fonts/barlow-semi-condensed-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 700; font-display: swap; src: url("fonts/barlow-semi-condensed-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Sans 3"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/source-sans-3-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Sans 3"; font-style: normal; font-weight: 600; font-display: swap; src: url("fonts/source-sans-3-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); }
+:root { padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
+body { margin: 0; }
+[hidden] { display: none !important; }
+/* Layout: one-screen tool. Control rail on the left (stacks under the map on phones), road canvas fills the rest. */
+:root {
+  --ground: #eef1f4;      /* map ground */
+  --panel: #fbfcfd;
+  --ink: #17202b;
+  --muted: #5d6b7a;
+  --line: #d5dbe2;
+  --road: #b9c2cc;        /* unreached road */
+  --accent: #0f5c7a;      /* petrol: UI accent */
+  --accent-soft: #dcecf2;
+  --pin-ring: #ffffff;
+  --muni: rgba(15, 92, 122, 0.05);
+  --muni-edge: rgba(15, 92, 122, 0.35);
+  --good: #2f6fd0;
+  --ok: #e0a526;
+  --bad: #cf3a2b;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10161d; --panel: #161e27; --ink: #e5ebf1; --muted: #93a1b0; --line: #2a3542;
+    --road: #3a4653; --accent: #5fb4d4; --accent-soft: #19323e; --pin-ring: #0b1015;
+    --muni: rgba(95, 180, 212, 0.05); --muni-edge: rgba(95, 180, 212, 0.35);
+    --good: #4f8ff0; --ok: #e8b23a; --bad: #f05a49;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10161d; --panel: #161e27; --ink: #e5ebf1; --muted: #93a1b0; --line: #2a3542;
+  --road: #3a4653; --accent: #5fb4d4; --accent-soft: #19323e; --pin-ring: #0b1015;
+  --muni: rgba(95, 180, 212, 0.05); --muni-edge: rgba(95, 180, 212, 0.35);
+  --good: #4f8ff0; --ok: #e8b23a; --bad: #f05a49;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--panel); color: var(--ink); font-family: var(--f-body); font-size: 14px; line-height: 1.45; }
+* { box-sizing: border-box; }
+.app { height: 100%; display: grid; grid-template-columns: 360px 1fr; }
+.rail { overflow-y: auto; border-right: 1px solid var(--line); padding-block: 16px 32px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.mapwrap { position: relative; background: var(--ground); min-width: 0; overflow: hidden; }
+canvas#map { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+canvas#map.dragging { cursor: grabbing; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 58vh auto; height: auto; }
+  html, body { height: auto; }
+  .mapwrap { order: -1; height: 58vh; }
+  .rail { border-right: 0; border-top: 1px solid var(--line); overflow: visible; padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+}
+h1 { font-family: var(--f-display); font-weight: 700; font-size: 26px; line-height: 1.05; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
+.sub { color: var(--muted); margin: 6px 0 0; }
+h2 { font-family: var(--f-display); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); margin: 0 0 8px; }
+section { display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+label.inline { display: flex; gap: 6px; align-items: center; }
+select, input[type=number], input[type=text] { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; min-width: 0; }
+input[type=number] { width: 4.6em; font-family: var(--f-mono); font-size: 13px; }
+input[type=range] { accent-color: var(--accent); flex: 1; min-width: 80px; }
+input[type=checkbox] { accent-color: var(--accent); }
+button { font: inherit; font-weight: 600; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 5px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); font-weight: 600; }
+.seg button:last-child { border-right: 0; }
+.stations { display: flex; flex-direction: column; gap: 6px; }
+.st { display: grid; grid-template-columns: 14px 1fr auto; gap: 4px 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.st .chip { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--pin-ring); box-shadow: 0 0 0 1px var(--line); }
+.st .nm { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st .ctl { grid-column: 2 / 4; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.st.off { opacity: 0.5; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.kpi { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.kpi b { display: block; font-family: var(--f-mono); font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.kpi span { font-size: 11.5px; color: var(--muted); }
+.kpi .delta { font-size: 11.5px; font-family: var(--f-mono); }
+svg#curve { width: 100%; height: auto; display: block; }
+.top { display: flex; flex-direction: column; gap: 2px; }
+.top button { text-align: left; font-weight: 400; display: grid; grid-template-columns: 2.2em 1fr auto; gap: 6px; padding: 4px 8px; }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); }
+details summary { cursor: pointer; font-weight: 600; }
+details p, details li { color: var(--muted); font-size: 13px; }
+details ul { padding-left: 18px; margin: 6px 0; }
+.legend { position: absolute; left: max(12px, env(safe-area-inset-left, 0px)); bottom: max(12px, env(safe-area-inset-bottom, 0px)); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12px; max-width: calc(100% - 24px); }
+.legend canvas { display: block; width: 240px; max-width: 100%; height: 12px; border-radius: 2px; }
+.legend .ticks { position: relative; height: 16px; width: 240px; max-width: 100%; font-family: var(--f-mono); font-size: 11px; color: var(--muted); }
+.legend .ticks span { position: absolute; transform: translateX(-50%); top: 2px; }
+.legend .keys { display: flex; gap: 10px; flex-wrap: wrap; }
+.legend .keys i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.mapbtns { position: absolute; right: max(12px, env(safe-area-inset-right, 0px)); top: 12px; display: flex; flex-direction: column; gap: 4px; }
+.mapbtns button { width: 34px; height: 34px; padding: 0; font-size: 18px; line-height: 1; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); max-width: 260px; }
+.tip b { font-weight: 600; }
+.status { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); padding: 24px; text-align: center; }
+.attrib { position: absolute; right: max(8px, env(safe-area-inset-right, 0px)); bottom: max(6px, env(safe-area-inset-bottom, 0px)); font-size: 11px; background: var(--panel); color: var(--muted); padding: 1px 6px; border-radius: 4px; opacity: 0.9; }
+.attrib a { color: inherit; }
+.disclaimer { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.disclaimer p { margin: 0; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="rail">
+    <header>
+      <h1>Amersfoort opkomstkaart</h1>
+      <p class="sub">Drag the station pins. Roads turn from blue to red with the opkomsttijd of the fastest fire engine: dispatch, turn-out and the drive over OpenStreetMap roads without traffic.</p>
+    </header>
+
+    <section>
+      <h2>Scenario</h2>
+      <div class="row">
+        <button id="sc-now">Today</button>
+        <button id="sc-oost">Plan: oost</button>
+        <button id="sc-west">Plan: west</button>
+      </div>
+      <div class="stations" id="stations"></div>
+      <div class="row">
+        <button id="add-st">+ Add station</button>
+        <span class="small muted">New stations appear in the map centre.</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Norm and colours</h2>
+      <div class="row">
+        <label class="inline" for="norm">Norm</label>
+        <select id="norm">
+          <option value="I">GGO cat. I: good &lt; 7, sufficient &lt; 10 min</option>
+          <option value="II" selected>GGO cat. II: good &lt; 10, sufficient &lt; 13 min</option>
+          <option value="III">GGO cat. III: good &lt; 15, sufficient &lt; 18 min</option>
+          <option value="8">Old norm: 8 min</option>
+        </select>
+      </div>
+      <div class="row">
+        <span>Colour by</span>
+        <div class="seg" role="group" aria-label="Colour roads by">
+          <button id="cm-time" aria-pressed="true">Time</button>
+          <button id="cm-norm" aria-pressed="false">Norm</button>
+          <button id="cm-station" aria-pressed="false">Station</button>
+        </div>
+      </div>
+      <label class="inline"><input type="checkbox" id="tiles" checked> Background map</label>
+      <div class="row">
+        <label class="inline" for="dispatch">Dispatch (meldkamer)</label>
+        <input type="number" id="dispatch" min="0" max="300" step="5" value="60"><span class="small muted">s</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Driving</h2>
+      <div class="row">
+        <label class="inline" for="speeds">Speeds</label>
+        <select id="speeds">
+          <option value="ff" selected>Calibrated to the VRU results</option>
+          <option value="limit">At the speed limit</option>
+          <option value="blue">Blue lights: limit +20% in town</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="inline" for="factor">Speed factor</label>
+        <input type="range" id="factor" min="70" max="130" step="5" value="100">
+        <span class="mono" id="factor-v">100%</span>
+      </div>
+      <label class="inline"><input type="checkbox" id="oneway" checked> Respect one-way streets</label>
+      <label class="inline"><input type="checkbox" id="bus" checked> Use bus-only roads</label>
+    </section>
+
+    <section>
+      <h2>Volunteers</h2>
+      <label class="inline"><input type="checkbox" id="homeleg" checked> Volunteer turn-out grows with distance from the reference point</label>
+      <p class="small muted" style="margin:0">The VRU measured 5:11 at Het Hofslot and assumes the same at Olympus oost. Moving a volunteer station adds the drive from the white reference pin, the way the VRU added 1:19 for west (6:30). Drag the pin to where the volunteers actually live.</p>
+    </section>
+
+    <section>
+      <h2>Addresses reached</h2>
+      <div class="seg" role="group" aria-label="Area">
+        <button id="rg-n" aria-pressed="true">North of A1</button>
+        <button id="rg-s" aria-pressed="false">South</button>
+        <button id="rg-a" aria-pressed="false">All</button>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><span id="k1-l">within 10 min</span><b id="k1">–</b><span class="delta" id="k1-d"></span></div>
+        <div class="kpi"><span id="k2-l">within 13 min</span><b id="k2">–</b><span class="delta" id="k2-d"></span></div>
+        <div class="kpi"><span>median</span><b id="k3">–</b><span class="delta" id="k3-d"></span></div>
+      </div>
+      <svg id="curve" viewBox="0 0 320 150" role="img" aria-label="Share of addresses reached against opkomsttijd"></svg>
+      <p class="small muted" style="margin:-4px 0 0">Share of addresses reached (up) against opkomsttijd in minutes (across).</p>
+      <div class="row">
+        <button id="baseline">Keep as baseline</button>
+        <span class="small muted" id="baseline-l">No baseline yet. The dashed line will show it.</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Search for a better spot</h2>
+      <p class="small muted" style="margin:0">Tries the station on a grid of locations across the city, with the other stations fixed, and colours each spot by the share of addresses it helps reach in time.</p>
+      <div class="row">
+        <label class="inline" for="mv">Move</label><select id="mv"></select>
+      </div>
+      <div class="row">
+        <label class="inline" for="target">Count</label>
+        <select id="target">
+          <option value="n" selected>addresses north of A1</option>
+          <option value="a">all addresses</option>
+          <option value="s">addresses south of A1</option>
+        </select>
+        <select id="goal" aria-label="Score">
+          <option value="ref" selected>within good</option>
+          <option value="max">within sufficient</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="inline" for="step">Grid</label>
+        <select id="step"><option value="250">250 m</option><option value="400" selected>400 m</option><option value="600">600 m</option></select>
+      </div>
+      <div class="row">
+        <label class="inline" for="cand-to">Turn-out</label>
+        <select id="cand-to">
+          <option value="fixed" selected>same everywhere (crew lives nearby)</option>
+          <option value="model">as configured above</option>
+        </select>
+        <button class="primary" id="run">Search</button>
+        <button id="clear-heat" hidden>Hide</button>
+      </div>
+      <div class="progress" id="prog" hidden><i></i></div>
+      <div class="top" id="toplist"></div>
+    </section>
+
+    <details>
+      <summary>How the times are computed</summary>
+      <ul>
+        <li>Opkomsttijd = dispatch + turn-out (uitruktijd) + drive time, as in the VRU dekkingsplan.</li>
+        <li>Turn-out times from the VRU dekkingsplan 2023-2024: Amersfoort-Centrum TS1 1:38, Amersfoort-Noord professional 1:26, volunteer 5:11.</li>
+        <li>The VRU does not publish its dispatch time or road speeds (TomTom speed profiles). The default speeds and the 60 s dispatch were tuned so this page reproduces the VRU's own results: 96.2% of Amersfoort within 10 minutes with Olympus oost, 90.7% with west.</li>
+        <li>Olympus oost and west are estimates: oost by the roundabout on the Bergenboulevard (the VRU mentions "de rotonde"), west by the Lindeboomseweg. Drag them if you know the exact plots.</li>
+        <li>The drive goes to the nearest road point of each address. Roads without addresses are coloured too.</li>
+        <li>The VRU scores the median time per CBS buurt. This page counts individual addresses, so it shows where the norm is met, not the official buurt verdict.</li>
+        <li>Road and address data © OpenStreetMap contributors, available under the Open Database License. Background map tiles © OpenStreetMap contributors.</li>
+      </ul>
+    </details>
+    <footer class="disclaimer">
+      <p><b>Not an official tool.</b> This map is an independent estimate built from public data. It is not affiliated with the fire service, the safety region or the municipality. The results are approximations, not a scientific study or legal assessment, and should not be used as the basis for conclusions or decisions.</p>
+      <p>This page and its code were written entirely by an AI assistant (Claude, by Anthropic).</p>
+    </footer>
+  </aside>
+
+  <main class="mapwrap" id="mapwrap">
+    <canvas id="map" aria-label="Road map of Amersfoort coloured by opkomsttijd"></canvas>
+    <div class="status" id="status">Loading road network…</div>
+    <div class="mapbtns">
+      <button id="zin" aria-label="Zoom in">+</button>
+      <button id="zout" aria-label="Zoom out">−</button>
+      <button id="zfit" aria-label="Fit city" style="font-size:13px">fit</button>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="tip" id="tip" hidden></div>
+    <div class="attrib">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div>
+  </main>
+</div>
+
+<script>
+/* ---------- core routing (also shipped to the search worker via toString) ---------- */
+function makeHeap(cap) {
+  return { k: new Float64Array(cap), v: new Int32Array(cap), n: 0 };
+}
+function heapPush(h, key, val) {
+  if (h.n >= h.k.length) {
+    const k2 = new Float64Array(h.k.length * 2); k2.set(h.k); h.k = k2;
+    const v2 = new Int32Array(h.v.length * 2); v2.set(h.v); h.v = v2;
+  }
+  let i = h.n++; const K = h.k, V = h.v;
+  while (i > 0) {
+    const p = (i - 1) >> 1;
+    if (K[p] <= key) break;
+    K[i] = K[p]; V[i] = V[p]; i = p;
+  }
+  K[i] = key; V[i] = val;
+}
+function heapPop(h) {
+  const K = h.k, V = h.v; const top = V[0], topk = K[0];
+  const n = --h.n; const key = K[n], val = V[n];
+  let i = 0;
+  while (true) {
+    let c = 2 * i + 1; if (c >= n) break;
+    if (c + 1 < n && K[c + 1] < K[c]) c++;
+    if (K[c] >= key) break;
+    K[i] = K[c]; V[i] = V[c]; i = c;
+  }
+  K[i] = key; V[i] = val;
+  h.lastKey = topk;
+  return top;
+}
+// Multi-source Dijkstra. sources: [[vertex, startSeconds, originId], ...]. limit: stop beyond this time.
+function dijkstra(G, sources, limit, dist, org, heap) {
+  dist.fill(Infinity); if (org) org.fill(-1);
+  heap.n = 0;
+  for (const [v, t, o] of sources) {
+    if (t < dist[v]) { dist[v] = t; if (org) org[v] = o; heapPush(heap, t, v); }
+  }
+  const head = G.head, to = G.to, w = G.w;
+  while (heap.n > 0) {
+    const u = heapPop(heap); const du = heap.lastKey;
+    if (du > dist[u]) continue;
+    if (du > limit) break;
+    const ou = org ? org[u] : 0;
+    for (let i = head[u], end = head[u + 1]; i < end; i++) {
+      const v = to[i], nd = du + w[i];
+      if (nd < dist[v]) { dist[v] = nd; if (org) org[v] = ou; heapPush(heap, nd, v); }
+    }
+  }
+}
+// Time to reach point s metres along edge e (from its first vertex).
+function timeOnEdge(E, dist, e, s) {
+  const L = E.len[e], sp = E.spd[e], d = E.dir[e];
+  if (sp <= 0) return Infinity;
+  let t = Infinity;
+  if (d & 1) t = dist[E.u[e]] + s / sp;
+  if (d & 2) { const t2 = dist[E.v[e]] + (L - s) / sp; if (t2 < t) t = t2; }
+  return t;
+}
+function addrTimes(E, A, dist, out) {
+  for (let i = 0; i < A.n; i++) {
+    const e = A.e[i]; out[i] = timeOnEdge(E, dist, e, A.f[i] * E.len[e]);
+  }
+}
+
+/* ---------- search worker ---------- */
+function workerMain() {
+  let G, E, A, nv;
+  onmessage = (ev) => {
+    const m = ev.data;
+    if (m.type === "init") { G = m.G; E = m.E; A = m.A; nv = m.nv; return; }
+    if (m.type === "run") {
+      const dist = new Float64Array(nv), heap = makeHeap(1 << 16), at = new Float64Array(A.n);
+      const fixed = m.fixed, mask = m.mask, thr = m.thr;
+      let total = 0; for (let i = 0; i < A.n; i++) if (mask[i]) total++;
+      const batch = [];
+      for (let c = 0; c < m.cands.length; c++) {
+        const [v, t0] = m.cands[c];
+        dijkstra(G, [[v, t0, 0]], thr + 1, dist, null, heap);
+        addrTimes(E, A, dist, at);
+        let hit = 0, gain = 0;
+        for (let i = 0; i < A.n; i++) {
+          if (!mask[i]) continue;
+          const t = at[i] < fixed[i] ? at[i] : fixed[i];
+          if (t <= thr) { hit++; if (fixed[i] > thr) gain++; }
+        }
+        batch.push([c, total ? hit / total : 0, gain]);
+        if (batch.length >= 8 || c === m.cands.length - 1) { postMessage({ type: "part", id: m.id, res: batch.splice(0), done: c + 1 }); }
+      }
+      postMessage({ type: "end", id: m.id });
+    }
+  };
+}
+
+/* ---------- app ---------- */
+const $ = (id) => document.getElementById(id);
+const LAT0 = 52.17, LON0 = 5.39;
+// Web Mercator, scaled to metres around Amersfoort, so OpenStreetMap tiles line up with the roads.
+const RAD = Math.PI / 180, R_EARTH = 6378137, C0 = Math.cos(LAT0 * RAD), RC = R_EARTH * C0;
+const MY0 = Math.log(Math.tan(Math.PI / 4 + LAT0 * RAD / 2));
+const toXY = (lat, lon) => [RC * (lon - LON0) * RAD, -RC * (Math.log(Math.tan(Math.PI / 4 + lat * RAD / 2)) - MY0)];
+const toLL = (x, y) => [(2 * Math.atan(Math.exp(MY0 - y / RC)) - Math.PI / 2) / RAD, LON0 + x / RC / RAD];
+
+const NORMS = { I: [420, 600], II: [600, 780], III: [900, 1080], "8": [480, 480] };
+const ST_COLORS = ["#3a63d0", "#c2410c", "#0f8a7e", "#9b4fc4", "#b8860b", "#c03a6b", "#4b7f2a"];
+const TURNOUT = { centrum: 98, pro: 86, vol: 311 };
+const TYPE_LABEL = { centrum: "Professional, Centrum TS1 (1:38)", pro: "Professional, Noord (1:26)", vol: "Volunteer (5:11 + home leg)", custom: "Custom turn-out" };
+
+// Station places. Coordinates are refined from road names when the data loads (see resolvePlaces).
+const PLACES = {
+  koppel: { name: "Centrum, Kleine Koppel", lat: 52.16207, lon: 5.37778 },
+  zielhorst: { name: "Centrum, Zielhorsterweg", lat: 52.16742, lon: 5.39000 },
+  hofslot: { name: "Noord, Het Hofslot", lat: 52.19015, lon: 5.40634 },
+  oost: { name: "Noord, Olympus oost", lat: 52.19665, lon: 5.40560 },
+  west: { name: "Noord, Olympus west", lat: 52.19720, lon: 5.39860 },
+};
+
+const S = {
+  D: null, E: null, A: null, G: null, nv: 0,
+  stations: [], nextId: 1,
+  anchor: null, anchorDist: null,
+  norm: "II", colorMode: "time", region: "n",
+  dispatch: 60, speeds: "ff", factor: 1, oneway: true, bus: true, homeleg: true,
+  dist: null, org: null, heap: null, addrT: null,
+  baseline: null, heat: null, heatMeta: null,
+  view: { s: 0.05, tx: 0, ty: 0 }, tiles: true,
+};
+
+/* ----- data preparation ----- */
+function prepare(D) {
+  const nE = D.eu.length;
+  const eoff = new Int32Array(nE + 1);
+  let total = 0; for (let e = 0; e < nE; e++) { eoff[e] = total; total += D.enp[e]; } eoff[nE] = total;
+  const P = new Float32Array(total * 2);
+  let k = 0, p = 0;
+  for (let e = 0; e < nE; e++) {
+    let la = 0, lo = 0;
+    for (let j = 0; j < D.enp[e]; j++) {
+      la += D.coords[k++]; lo += D.coords[k++];
+      const [x, y] = toXY(la / 1e5, lo / 1e5); P[p * 2] = x; P[p * 2 + 1] = y; p++;
+    }
+  }
+  const nv = D.nv;
+  const VX = new Float32Array(nv), VY = new Float32Array(nv), vOK = new Uint8Array(nv);
+  const cls = new Uint8Array(nE), ms = new Uint8Array(nE), ow = new Int8Array(nE), busOnly = new Uint8Array(nE), nameI = new Int32Array(nE);
+  const NO_SNAP = new Set(["motorway", "motorway_link", "trunk", "trunk_link", "busway"]);
+  for (let e = 0; e < nE; e++) {
+    const a = D.attrs[D.ea[e]];
+    cls[e] = a[0]; ms[e] = a[1]; ow[e] = a[2]; busOnly[e] = a[3]; nameI[e] = a[4];
+    const u = D.eu[e], v = D.ev[e], a0 = eoff[e] * 2, a1 = (eoff[e + 1] - 1) * 2;
+    VX[u] = P[a0]; VY[u] = P[a0 + 1]; VX[v] = P[a1]; VY[v] = P[a1 + 1];
+    if (!NO_SNAP.has(D.classes[a[0]]) && !a[3]) { vOK[u] = 1; vOK[v] = 1; }
+  }
+  // spatial grid of segments for hover, and of vertices for snapping
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < total; i++) { const x = P[i * 2], y = P[i * 2 + 1]; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  const CELL = 150, GW = Math.ceil((maxX - minX) / CELL) + 1, GH = Math.ceil((maxY - minY) / CELL) + 1;
+  const segGrid = new Map(), vGrid = new Map();
+  const gkey = (x, y) => Math.floor((y - minY) / CELL) * GW + Math.floor((x - minX) / CELL);
+  for (let e = 0; e < nE; e++) for (let j = eoff[e]; j < eoff[e + 1] - 1; j++) {
+    const mx = (P[j * 2] + P[j * 2 + 2]) / 2, my = (P[j * 2 + 1] + P[j * 2 + 3]) / 2;
+    const key = gkey(mx, my); let l = segGrid.get(key); if (!l) segGrid.set(key, l = []); l.push(e, j);
+  }
+  for (let v = 0; v < nv; v++) if (vOK[v]) { const key = gkey(VX[v], VY[v]); let l = vGrid.get(key); if (!l) vGrid.set(key, l = []); l.push(v); }
+  // addresses
+  const nA = D.addr.length;
+  const A = { n: nA, e: new Int32Array(nA), f: new Float32Array(nA), north: new Uint8Array(nA), x: new Float32Array(nA), y: new Float32Array(nA) };
+  for (let i = 0; i < nA; i++) {
+    const a = D.addr[i]; A.e[i] = a[2]; A.f[i] = a[3]; A.north[i] = a[4];
+    const [x, y] = toXY(a[0] / 1e5, a[1] / 1e5); A.x[i] = x; A.y[i] = y;
+  }
+  const boundary = (D.boundary || []).map(r => { const out = []; let la = 0, lo = 0; for (const c of r) { const q = toXY(c[0] / 1e5, c[1] / 1e5); out.push(q); } return out; });
+  S.D = D; S.nv = nv; S.A = A; S.boundary = boundary;
+  S.E = { n: nE, u: Int32Array.from(D.eu), v: Int32Array.from(D.ev), len: Float32Array.from(D.elen), spd: new Float32Array(nE), dir: new Uint8Array(nE),
+    cls, ms, ow, busOnly, nameI, eoff, P, VX, VY, vOK, segGrid, vGrid, gkey, CELL, GW, bbox: [minX, minY, maxX, maxY] };
+  S.dist = new Float64Array(nv); S.org = new Int16Array(nv); S.heap = makeHeap(1 << 16);
+  S.anchorDist = new Float64Array(nv);
+  S.addrT = new Float64Array(nA);
+  S.boundaryPath = new Path2D();
+  for (const r of boundary) { r.forEach((q, i) => i ? S.boundaryPath.lineTo(q[0], q[1]) : S.boundaryPath.moveTo(q[0], q[1])); S.boundaryPath.closePath(); }
+}
+
+// Default speed by class (km/h) when OSM has no maxspeed.
+const DEF_MS = { motorway: 100, motorway_link: 70, trunk: 80, trunk_link: 60, primary: 50, primary_link: 40, secondary: 50, secondary_link: 40,
+  tertiary: 50, tertiary_link: 40, unclassified: 50, residential: 30, living_street: 15, service: 20, road: 30, busway: 50 };
+// Free-flow share of the limit, roughly what TomTom night-time speed profiles show per road type.
+const FF = { motorway: 0.97, motorway_link: 0.75, trunk: 0.9, trunk_link: 0.75, primary: 0.85, primary_link: 0.7, secondary: 0.82, secondary_link: 0.7,
+  tertiary: 0.78, tertiary_link: 0.7, unclassified: 0.75, residential: 0.72, living_street: 0.7, service: 0.6, road: 0.7, busway: 0.8 };
+function speedKmh(cname, limit) {
+  const lim = limit || DEF_MS[cname] || 30;
+  if (S.speeds === "limit") return Math.min(lim, 100);
+  if (S.speeds === "blue") return cname.startsWith("motorway") || cname.startsWith("trunk") ? Math.min(lim, 100) : Math.min(lim * 1.2, 100);
+  // x1.3 calibrates to the VRU's results: with 60 s dispatch this reproduces 96.2% (oost) and 90.7% (west) within 10 min.
+  return Math.min(Math.min(lim, 100) * (FF[cname] || 0.7) * 1.3, 110);
+}
+function buildGraph() {
+  const E = S.E, D = S.D, nv = S.nv;
+  const deg = new Int32Array(nv + 1);
+  for (let e = 0; e < E.n; e++) {
+    const cname = D.classes[E.cls[e]];
+    const usable = !E.busOnly[e] || S.bus;
+    E.spd[e] = usable ? speedKmh(cname, E.ms[e]) * S.factor / 3.6 : 0;
+    let d = usable ? 3 : 0;
+    if (usable && S.oneway) { if (E.ow[e] === 1) d = 1; else if (E.ow[e] === -1) d = 2; }
+    E.dir[e] = d;
+    if (d & 1) deg[E.u[e]]++;
+    if (d & 2) deg[E.v[e]]++;
+  }
+  const head = new Int32Array(nv + 1);
+  for (let v = 0; v < nv; v++) head[v + 1] = head[v] + deg[v];
+  const fill = head.slice(0, nv); const m = head[nv];
+  const to = new Int32Array(m), w = new Float32Array(m);
+  for (let e = 0; e < E.n; e++) {
+    const d = E.dir[e]; if (!d) continue; const t = E.len[e] / E.spd[e];
+    if (d & 1) { const i = fill[E.u[e]]++; to[i] = E.v[e]; w[i] = t; }
+    if (d & 2) { const i = fill[E.v[e]]++; to[i] = E.u[e]; w[i] = t; }
+  }
+  S.G = { head, to, w };
+  S.worker && S.worker.postMessage({ type: "init", G: S.G, E: { u: E.u, v: E.v, len: E.len, spd: E.spd, dir: E.dir }, A: { n: S.A.n, e: S.A.e, f: S.A.f }, nv });
+}
+function snapVertex(x, y) {
+  const E = S.E; let best = -1, bd = Infinity;
+  for (let r = 1; r <= 8 && best < 0; r *= 2) {
+    const cx = Math.floor((x - E.bbox[0]) / E.CELL), cy = Math.floor((y - E.bbox[1]) / E.CELL);
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const l = E.vGrid.get((cy + dy) * E.GW + cx + dx); if (!l) continue;
+      for (const v of l) { const d = (E.VX[v] - x) ** 2 + (E.VY[v] - y) ** 2; if (d < bd) { bd = d; best = v; } }
+    }
+  }
+  return best;
+}
+
+/* ----- stations ----- */
+function addStation(place, type, extra = {}) {
+  const [x, y] = toXY(place.lat, place.lon);
+  const st = { id: S.nextId++, name: place.name, x, y, type, custom: 300, on: true, color: ST_COLORS[(S.nextId - 2) % ST_COLORS.length], ...extra };
+  S.stations.push(st); return st;
+}
+function scenario(which) {
+  S.stations = []; S.nextId = 1;
+  // The volunteer reference sits where the VRU applies 5:11: Het Hofslot today, Olympus oost in the plans.
+  const ref = which === "now" ? PLACES.hofslot : PLACES.oost;
+  if (S.anchor) { [S.anchor.x, S.anchor.y] = toXY(ref.lat, ref.lon); computeAnchor(); }
+  if (which === "now") { addStation(PLACES.koppel, "centrum"); addStation(PLACES.hofslot, "vol"); }
+  if (which === "oost") { addStation(PLACES.zielhorst, "centrum"); addStation(PLACES.oost, "vol"); }
+  if (which === "west") { addStation(PLACES.zielhorst, "centrum"); addStation(PLACES.west, "vol"); }
+  for (const n of S.neighbours || []) addStation(n, "custom", { custom: n.turnout, on: true, neighbour: true });
+  S.scenario = which;
+  ["now", "oost", "west"].forEach(k => $("sc-" + k).setAttribute("aria-pressed", String(k === which)));
+  clearHeat(); renderStations(); recompute();
+}
+function turnout(st, v) {
+  if (st.type === "custom") return st.custom;
+  if (st.type === "vol") return TURNOUT.vol + (S.homeleg && v >= 0 && isFinite(S.anchorDist[v]) ? S.anchorDist[v] : 0);
+  return TURNOUT[st.type];
+}
+const fmt = (s) => { if (!isFinite(s)) return "–"; s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+
+function renderStations() {
+  const box = $("stations"); box.innerHTML = "";
+  const mv = $("mv"); const prev = mv.value; mv.innerHTML = "";
+  for (const st of S.stations) {
+    const el = document.createElement("div"); el.className = "st" + (st.on ? "" : " off");
+    const v = snapVertex(st.x, st.y);
+    el.innerHTML = `<span class="chip" style="background:${st.color}"></span><span class="nm" title="${st.name}">${st.name}</span>
+      <span class="mono" title="Turn-out time">${fmt(turnout(st, v))}</span>
+      <div class="ctl">
+        <select id="st-type-${st.id}" aria-label="Turn-out of ${st.name}">${Object.entries(TYPE_LABEL).map(([k, l]) => `<option value="${k}"${k === st.type ? " selected" : ""}>${l}</option>`).join("")}</select>
+        ${st.type === "custom" ? `<input type="number" id="st-c-${st.id}" min="0" max="900" step="5" value="${st.custom}" aria-label="Custom turn-out seconds"><span class="small muted">s</span>` : ""}
+        <label class="inline small"><input type="checkbox" id="st-on-${st.id}"${st.on ? " checked" : ""}> on</label>
+        <button id="st-rm-${st.id}" class="small" style="padding:2px 8px">Remove</button>
+      </div>`;
+    box.appendChild(el);
+    el.querySelector("select").onchange = (e) => { st.type = e.target.value; renderStations(); recompute(); };
+    const c = el.querySelector(`#st-c-${st.id}`); if (c) c.onchange = (e) => { st.custom = +e.target.value || 0; renderStations(); recompute(); };
+    el.querySelector(`#st-on-${st.id}`).onchange = (e) => { st.on = e.target.checked; renderStations(); recompute(); };
+    el.querySelector(`#st-rm-${st.id}`).onclick = () => { S.stations = S.stations.filter(s => s !== st); renderStations(); recompute(); };
+    if (!st.neighbour) { const o = document.createElement("option"); o.value = st.id; o.textContent = st.name; mv.appendChild(o); }
+  }
+  if ([...mv.options].some(o => o.value === prev)) mv.value = prev;
+  else { const noord = S.stations.find(s => s.name.startsWith("Noord")); if (noord) mv.value = noord.id; }
+}
+
+/* ----- compute ----- */
+function computeAnchor() {
+  if (!S.anchor) return;
+  const v = snapVertex(S.anchor.x, S.anchor.y);
+  dijkstra(S.G, [[v, 0, 0]], Infinity, S.anchorDist, null, S.heap);
+}
+function sourcesFor(list) {
+  const src = [];
+  list.forEach((st) => { if (!st.on) return; const v = snapVertex(st.x, st.y); if (v >= 0) src.push([v, S.dispatch + turnout(st, v), S.stations.indexOf(st)]); });
+  return src;
+}
+function recompute() {
+  if (!S.G) return;
+  dijkstra(S.G, sourcesFor(S.stations), Infinity, S.dist, S.org, S.heap);
+  addrTimes(S.E, S.A, S.dist, S.addrT);
+  buildPaths(); updateStats(); draw(); drawLegend();
+  document.querySelectorAll(".st .mono").forEach((el, i) => { const st = S.stations[i]; if (st) el.textContent = fmt(turnout(st, snapVertex(st.x, st.y))); });
+}
+
+/* ----- colour ----- */
+const STOPS = [[0, 34, 84, 196], [0.25, 34, 150, 214], [0.5, 61, 179, 120], [0.68, 230, 200, 50], [0.84, 240, 130, 36], [1, 205, 40, 30]];
+function rampRGB(f) {
+  f = Math.max(0, Math.min(1, f));
+  for (let i = 1; i < STOPS.length; i++) if (f <= STOPS[i][0]) {
+    const a = STOPS[i - 1], b = STOPS[i], t = (f - a[0]) / (b[0] - a[0]);
+    return [a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t].map(Math.round);
+  }
+}
+const NB = 48;
+function tMax() { return NORMS[S.norm][1] + 180; }
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function bucketColors() {
+  if (S.colorMode === "time") return Array.from({ length: NB }, (_, i) => `rgb(${rampRGB(i / (NB - 1)).join(",")})`);
+  if (S.colorMode === "norm") return [css("--good"), css("--ok"), css("--bad")];
+  return S.stations.map(s => s.color);
+}
+function bucketOf(t, o) {
+  if (!isFinite(t)) return -1;
+  if (S.colorMode === "time") return Math.min(NB - 1, Math.floor(t / tMax() * NB));
+  if (S.colorMode === "norm") { const [r, m] = NORMS[S.norm]; return t <= r ? 0 : t <= m ? 1 : 2; }
+  return o;
+}
+const WCLS = (c) => /^(motorway|trunk)/.test(c) ? 0 : /^(primary|secondary)/.test(c) ? 1 : 2;
+function buildPaths() {
+  const E = S.E, D = S.D, P = E.P, dist = S.dist;
+  const nb = S.colorMode === "time" ? NB : S.colorMode === "norm" ? 3 : S.stations.length;
+  const paths = [0, 1, 2].map(() => Array.from({ length: nb + 1 }, () => new Path2D()));
+  const wc = S._wc || (S._wc = Uint8Array.from(E.cls, c => WCLS(D.classes[c])));
+  for (let e = 0; e < E.n; e++) {
+    const a0 = E.eoff[e], a1 = E.eoff[e + 1]; const pw = paths[wc[e]];
+    let s = 0;
+    const tu = (E.dir[e] & 1) ? dist[E.u[e]] : Infinity, tv = (E.dir[e] & 2) ? dist[E.v[e]] : Infinity;
+    const L = E.len[e], sp = E.spd[e];
+    for (let j = a0; j < a1 - 1; j++) {
+      const x0 = P[j * 2], y0 = P[j * 2 + 1], x1 = P[j * 2 + 2], y1 = P[j * 2 + 3];
+      const sl = Math.hypot(x1 - x0, y1 - y0); const sm = s + sl / 2; s += sl;
+      let t = Infinity, o = -1;
+      if (sp > 0) { const ta = tu + sm / sp, tb = tv + (L - sm) / sp; if (ta <= tb) { t = ta; o = S.org[E.u[e]]; } else { t = tb; o = S.org[E.v[e]]; } }
+      const b = bucketOf(t, o); const path = pw[b < 0 ? nb : b];
+      path.moveTo(x0, y0); path.lineTo(x1, y1);
+    }
+  }
+  S.paths = paths; S.pathColors = bucketColors();
+}
+
+/* ----- drawing ----- */
+const cv = $("map"), ctx = cv.getContext("2d");
+let DPR = 1;
+function resize() {
+  const r = cv.getBoundingClientRect(); DPR = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * DPR); cv.height = Math.round(r.height * DPR); draw();
+}
+function fit() {
+  const r = cv.getBoundingClientRect(); if (!S.E || !r.width) return;
+  let [x0, y0, x1, y1] = S.E.bbox;
+  if (S.boundary.length) { x0 = y0 = Infinity; x1 = y1 = -Infinity; for (const ring of S.boundary) for (const [x, y] of ring) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); } }
+  const s = Math.min(r.width / (x1 - x0), r.height / (y1 - y0)) * 0.92;
+  S.view = { s, tx: r.width / 2 - s * (x0 + x1) / 2, ty: r.height / 2 - s * (y0 + y1) / 2 }; draw();
+}
+const w2s = (x, y) => [x * S.view.s + S.view.tx, y * S.view.s + S.view.ty];
+const s2w = (X, Y) => [(X - S.view.tx) / S.view.s, (Y - S.view.ty) / S.view.s];
+let drawQueued = false;
+function draw() { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; drawNow(); }); } }
+function drawNow() {
+  const W = cv.width, H = cv.height; ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = css("--ground"); ctx.fillRect(0, 0, W, H);
+  if (!S.paths) return;
+  const { s, tx, ty } = S.view;
+  ctx.setTransform(DPR * s, 0, 0, DPR * s, DPR * tx, DPR * ty);
+  if (S.tiles) drawTiles();
+  ctx.fillStyle = css("--muni"); ctx.fill(S.boundaryPath, "evenodd");
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  const z = Math.max(0.6, Math.min(2.2, Math.sqrt(s / 0.12)));
+  const widths = [3.2 * z, 2.2 * z, 1.25 * z];
+  const heatOn = !!S.heat;
+  const road = css("--road");
+  for (let wc = 2; wc >= 0; wc--) {
+    ctx.lineWidth = widths[wc] / s;
+    const arr = S.paths[wc];
+    ctx.globalAlpha = heatOn ? 0.35 : 1;
+    ctx.strokeStyle = road; ctx.stroke(arr[arr.length - 1]);
+    for (let b = 0; b < arr.length - 1; b++) { ctx.strokeStyle = S.pathColors[b]; ctx.stroke(arr[b]); }
+  }
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = css("--muni-edge"); ctx.lineWidth = 1.2 / s; ctx.setLineDash([6 / s, 4 / s]); ctx.stroke(S.boundaryPath); ctx.setLineDash([]);
+  if (heatOn) drawHeat();
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawPins();
+}
+/* OpenStreetMap background tiles (https://operations.osmfoundation.org/policies/tiles/). */
+const tileCache = new Map();
+function tileImg(z, x, y) {
+  const key = z + "/" + x + "/" + y; let img = tileCache.get(key);
+  if (!img) {
+    img = new Image(); img.onload = draw; img.src = `https://tile.openstreetmap.org/${key}.png`;
+    tileCache.set(key, img);
+    if (tileCache.size > 600) tileCache.delete(tileCache.keys().next().value);
+  }
+  return img;
+}
+function drawTiles() {
+  const { s } = S.view; const W = cv.width / DPR, H = cv.height / DPR;
+  const z = Math.max(0, Math.min(19, Math.round(Math.log2(s * DPR * 2 * Math.PI * RC / 256))));
+  const full = 256 * 2 ** z, a = full / (2 * Math.PI * RC);
+  const bx = full * (LON0 + 180) / 360, by = full * (0.5 - MY0 / (2 * Math.PI));
+  const [x0, y0] = s2w(0, 0), [x1, y1] = s2w(W, H);
+  const n = 2 ** z;
+  const i0 = Math.max(0, Math.floor((a * x0 + bx) / 256)), i1 = Math.min(n - 1, Math.floor((a * x1 + bx) / 256));
+  const j0 = Math.max(0, Math.floor((a * y0 + by) / 256)), j1 = Math.min(n - 1, Math.floor((a * y1 + by) / 256));
+  if ((i1 - i0 + 1) * (j1 - j0 + 1) > 120) return;
+  const dark = css("--ground").startsWith("#1");
+  ctx.save();
+  ctx.filter = dark ? "grayscale(1) invert(1) brightness(0.85)" : "grayscale(1)";
+  ctx.globalAlpha = dark ? 0.32 : 0.42;
+  const sz = 256 / a + 0.5 / s;
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    const img = tileImg(z, i, j);
+    if (img.complete && img.naturalWidth) ctx.drawImage(img, (i * 256 - bx) / a, (j * 256 - by) / a, sz, sz);
+  }
+  ctx.restore();
+}
+function drawHeat() {
+  const H = S.heat, step = S.heatMeta.step, s = S.view.s;
+  const { lo, hi } = S.heatMeta;
+  for (const c of H) {
+    if (c.score == null) continue;
+    const f = hi > lo ? (c.score - lo) / (hi - lo) : 1;
+    ctx.fillStyle = heatColor(f);
+    ctx.globalAlpha = 0.85;
+    const r = step * 0.42;
+    ctx.fillRect(c.x - r, c.y - r, 2 * r, 2 * r);
+  }
+  ctx.globalAlpha = 1;
+  if (S.heatMeta.cur != null) {
+    // outline the top 5
+    ctx.strokeStyle = css("--ink"); ctx.lineWidth = 2 / s;
+    for (const c of S.heatMeta.best.slice(0, 5)) { const r = step * 0.42; ctx.strokeRect(c.x - r, c.y - r, 2 * r, 2 * r); }
+  }
+}
+// Sequential score palette (low = pale, high = deep teal-purple) so it reads apart from the time ramp.
+const HEAT = [[0, 246, 239, 189], [0.35, 140, 205, 160], [0.7, 40, 140, 160], [1, 52, 40, 120]];
+function heatColor(f) {
+  f = Math.max(0, Math.min(1, f));
+  for (let i = 1; i < HEAT.length; i++) if (f <= HEAT[i][0]) { const a = HEAT[i - 1], b = HEAT[i], t = (f - a[0]) / (b[0] - a[0]); return `rgb(${[1, 2, 3].map(k => Math.round(a[k] + (b[k] - a[k]) * t)).join(",")})`; }
+}
+function drawPins() {
+  ctx.font = `600 12px ${css("--f-display").split(",")[0]}, sans-serif`;
+  if (S.anchor && S.homeleg) {
+    const [X, Y] = w2s(S.anchor.x, S.anchor.y);
+    ctx.beginPath(); ctx.arc(X, Y, 6, 0, Math.PI * 2); ctx.fillStyle = "#ffffff"; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = "#17202b"; ctx.stroke();
+    const clash = S.stations.some(st => { const [sx, sy] = w2s(st.x, st.y); return Math.hypot(sx - X, sy - Y) < 40; });
+    if (!clash) { ctx.fillStyle = css("--ink"); ctx.fillText("volunteer reference (5:11)", X + 10, Y + 16); }
+  }
+  for (const st of S.stations) {
+    const [X, Y] = w2s(st.x, st.y);
+    ctx.globalAlpha = st.on ? 1 : 0.4;
+    ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X - 7, Y - 14); ctx.lineTo(X + 7, Y - 14); ctx.closePath();
+    ctx.beginPath(); ctx.arc(X, Y - 16, 10, 0, Math.PI * 2); ctx.fillStyle = st.color; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = css("--pin-ring"); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(X, Y - 6); ctx.lineTo(X, Y); ctx.strokeStyle = st.color; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.fillText(st.neighbour ? "·" : "▲", X, Y - 12);
+    ctx.textAlign = "left";
+    const label = `${st.name}  ${fmt(turnout(st, snapVertex(st.x, st.y)))}`;
+    ctx.lineWidth = 4; ctx.strokeStyle = css("--ground"); ctx.strokeText(label, X + 14, Y - 12);
+    ctx.fillStyle = css("--ink"); ctx.fillText(label, X + 14, Y - 12);
+  }
+  ctx.globalAlpha = 1;
+}
+function drawLegend() {
+  const L = $("legend"); const [r, m] = NORMS[S.norm];
+  if (S.heat) {
+    const { lo, hi } = S.heatMeta;
+    L.innerHTML = `<div class="small" style="margin-bottom:4px">Share reached ${S.heatMeta.goalLabel} with the station placed here</div><canvas id="lg" width="480" height="24"></canvas>
+      <div class="ticks"><span style="left:0;transform:none">${(lo * 100).toFixed(1)}%</span><span style="left:auto;right:0;transform:none">${(hi * 100).toFixed(1)}%</span></div>`;
+    const c = $("lg").getContext("2d"); for (let i = 0; i < 480; i++) { c.fillStyle = heatColor(i / 479); c.fillRect(i, 0, 1, 24); }
+    return;
+  }
+  if (S.colorMode === "time") {
+    const T = tMax();
+    const ticks = [0, 300, r, m, T].filter((v, i, a) => a.indexOf(v) === i);
+    L.innerHTML = `<div class="small" style="margin-bottom:4px">Opkomsttijd (min:s)</div><canvas id="lg" width="480" height="24"></canvas><div class="ticks">${ticks.map(t => `<span style="left:${t / T * 100}%">${t === T ? fmt(t) + "+" : fmt(t)}</span>`).join("")}</div>`;
+    const c = $("lg").getContext("2d"); for (let i = 0; i < 480; i++) { c.fillStyle = `rgb(${rampRGB(i / 479).join(",")})`; c.fillRect(i, 0, 1, 24); }
+    c.fillStyle = css("--ink"); [r, m].forEach(t => c.fillRect(Math.round(t / T * 480) - 1, 0, 2, 24));
+  } else if (S.colorMode === "norm") {
+    L.innerHTML = r === m ? `<div class="keys"><span><i style="background:var(--good)"></i>within ${fmt(r)}</span><span><i style="background:var(--bad)"></i>later</span></div>`
+      : `<div class="keys"><span><i style="background:var(--good)"></i>good &lt; ${fmt(r)}</span><span><i style="background:var(--ok)"></i>sufficient &lt; ${fmt(m)}</span><span><i style="background:var(--bad)"></i>insufficient</span></div>`;
+  } else {
+    L.innerHTML = `<div class="small" style="margin-bottom:4px">Fastest station</div><div class="keys">${S.stations.filter(s => s.on).map(s => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join("")}</div>`;
+  }
+}
+
+/* ----- stats & S-curve ----- */
+function regionMask(rg) { const A = S.A; return (i) => rg === "a" ? true : rg === "n" ? A.north[i] === 1 : A.north[i] === 0; }
+function summarize(times, rg) {
+  const inR = regionMask(rg); const arr = [];
+  for (let i = 0; i < times.length; i++) if (inR(i)) arr.push(times[i]);
+  arr.sort((a, b) => a - b);
+  const [r, m] = NORMS[S.norm]; const n = arr.length || 1;
+  const cnt = (t) => { let lo = 0, hi = arr.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] <= t) lo = mid + 1; else hi = mid; } return lo; };
+  const curve = []; for (let t = 0; t <= 1200; t += 15) curve.push(cnt(t) / n);
+  return { n: arr.length, ref: cnt(r) / n, max: cnt(m) / n, med: arr[Math.floor(arr.length / 2)], curve };
+}
+function pct(x) { return (x * 100).toFixed(1) + "%"; }
+function updateStats() {
+  const cur = summarize(S.addrT, S.region); S.cur = cur;
+  const [r, m] = NORMS[S.norm];
+  $("k1-l").textContent = r === m ? `within ${fmt(r)}` : `within ${fmt(r)} (good)`;
+  $("k2-l").textContent = r === m ? `within ${fmt(m)}` : `within ${fmt(m)}`;
+  $("k1").textContent = pct(cur.ref); $("k2").textContent = pct(cur.max); $("k3").textContent = fmt(cur.med);
+  const B = S.baseline ? summarize(S.baseline.t, S.region) : null;
+  const d = (a, b, inv) => { if (b == null) return ""; const x = a - b; const better = inv ? x < 0 : x > 0; const col = Math.abs(x) < 1e-9 ? "var(--muted)" : better ? "var(--good)" : "var(--bad)"; return `<span style="color:${col}">${x >= 0 ? "+" : "−"}${inv ? fmt(Math.abs(x)) : (Math.abs(x) * 100).toFixed(1) + " pt"}</span>`; };
+  $("k1-d").innerHTML = B ? d(cur.ref, B.ref) : ""; $("k2-d").innerHTML = B ? d(cur.max, B.max) : ""; $("k3-d").innerHTML = B ? d(cur.med, B.med, true) : "";
+  drawCurve(cur, B);
+}
+function drawCurve(cur, B) {
+  const W = 320, H = 150, L = 34, R = 8, T = 8, Bm = 24, tm = 1200;
+  const X = (t) => L + (W - L - R) * t / tm, Y = (f) => T + (H - T - Bm) * (1 - f);
+  const [r, m] = NORMS[S.norm];
+  const line = (c) => c.map((f, i) => `${i ? "L" : "M"}${X(i * 15).toFixed(1)},${Y(f).toFixed(1)}`).join("");
+  let g = "";
+  for (const f of [0, 0.25, 0.5, 0.75, 1]) g += `<line x1="${L}" x2="${W - R}" y1="${Y(f)}" y2="${Y(f)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 4}" y="${Y(f) + 4}" text-anchor="end" font-size="10" fill="var(--muted)" font-family="var(--f-mono)">${f * 100}%</text>`;
+  for (let t = 0; t <= tm; t += 300) g += `<text x="${X(t)}" y="${H - 8}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--f-mono)">${t / 60}</text>`;
+  g += `<rect x="${X(r)}" y="${T}" width="${Math.max(0, X(m) - X(r))}" height="${H - T - Bm}" fill="var(--ok)" opacity="0.12"/>`;
+  g += `<line x1="${X(r)}" x2="${X(r)}" y1="${T}" y2="${H - Bm}" stroke="var(--good)" stroke-width="1.5"/>`;
+  if (m !== r) g += `<line x1="${X(m)}" x2="${X(m)}" y1="${T}" y2="${H - Bm}" stroke="var(--bad)" stroke-width="1.5"/>`;
+  if (B) g += `<path d="${line(B.curve)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  g += `<path d="${line(cur.curve)}" fill="none" stroke="var(--accent)" stroke-width="2.2"/>`;
+  $("curve").innerHTML = g;
+}
+
+/* ----- candidate search ----- */
+function ensureWorker() {
+  if (S.worker) return;
+  const src = [makeHeap, heapPush, heapPop, dijkstra, timeOnEdge, addrTimes].map(f => f.toString()).join("\n") + "\n(" + workerMain.toString() + ")();";
+  S.worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+  S.worker.onmessage = onWorker;
+  buildGraph();
+}
+function inBoundary(x, y) {
+  if (!S.boundary.length) return true;
+  let inside = false;
+  for (const ring of S.boundary) for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function runSearch() {
+  ensureWorker();
+  const mover = S.stations.find(s => String(s.id) === $("mv").value); if (!mover) return;
+  const step = +$("step").value, target = $("target").value, goal = $("goal").value;
+  const [r, m] = NORMS[S.norm]; const thr = goal === "ref" ? r : m;
+  // fixed: everyone except the mover
+  const fixedDist = new Float64Array(S.nv), fixedT = new Float64Array(S.A.n);
+  dijkstra(S.G, sourcesFor(S.stations.filter(s => s !== mover)), thr + 1, fixedDist, null, S.heap);
+  addrTimes(S.E, S.A, fixedDist, fixedT);
+  const inR = regionMask(target); const mask = new Uint8Array(S.A.n); for (let i = 0; i < S.A.n; i++) mask[i] = inR(i) ? 1 : 0;
+  const [x0, y0, x1, y1] = S.E.bbox; const cands = [], meta = [];
+  const seen = new Set();
+  for (let y = y0 + step / 2; y < y1; y += step) for (let x = x0 + step / 2; x < x1; x += step) {
+    if (!inBoundary(x, y)) continue;
+    const v = snapVertex(x, y); if (v < 0 || seen.has(v)) continue;
+    if (Math.hypot(S.E.VX[v] - x, S.E.VY[v] - y) > step * 0.75) continue;
+    seen.add(v);
+    const fixedTO = $("cand-to").value === "fixed";
+    cands.push([v, S.dispatch + (fixedTO ? turnout(mover, snapVertex(mover.x, mover.y)) : turnout(mover, v))]); meta.push({ x, y, v, score: null, gain: 0 });
+  }
+  const cur = summarizeMask(S.addrT, mask, thr);
+  S.heat = meta;
+  S.heatMeta = { id: (S.heatMeta?.id || 0) + 1, step, mover, thr, cur, lo: 0, hi: 1, best: [], goalLabel: (goal === "ref" ? "within " : "within ") + fmt(thr) + " (" + { n: "north of A1", a: "all addresses", s: "south of A1" }[target] + ")" };
+  $("prog").hidden = false; $("prog").firstElementChild.style.width = "0%"; $("clear-heat").hidden = false;
+  $("toplist").innerHTML = `<p class="small muted" style="margin:0">Now: ${mover.name} reaches ${pct(cur)}. Searching ${cands.length} spots…</p>`;
+  S.worker.postMessage({ type: "run", id: S.heatMeta.id, cands, fixed: fixedT, mask, thr });
+  drawLegend(); draw();
+}
+function summarizeMask(times, mask, thr) { let n = 0, h = 0; for (let i = 0; i < times.length; i++) if (mask[i]) { n++; if (times[i] <= thr) h++; } return n ? h / n : 0; }
+function onWorker(ev) {
+  const m = ev.data; if (!S.heatMeta || m.id !== S.heatMeta.id) return;
+  if (m.type === "part") {
+    for (const [c, score, gain] of m.res) { S.heat[c].score = score; S.heat[c].gain = gain; }
+    $("prog").firstElementChild.style.width = (m.done / S.heat.length * 100).toFixed(0) + "%";
+    refreshHeatMeta(); draw();
+  }
+  if (m.type === "end") { $("prog").hidden = true; refreshHeatMeta(); renderTop(); drawLegend(); draw(); }
+}
+function refreshHeatMeta() {
+  const done = S.heat.filter(c => c.score != null); if (!done.length) return;
+  let lo = Infinity, hi = -Infinity; for (const c of done) { lo = Math.min(lo, c.score); hi = Math.max(hi, c.score); }
+  // stretch the palette over the upper part so differences among good spots show
+  const sorted = done.map(c => c.score).sort((a, b) => a - b);
+  S.heatMeta.lo = Math.max(lo, sorted[Math.floor(sorted.length * 0.25)]); S.heatMeta.hi = hi;
+  S.heatMeta.best = done.slice().sort((a, b) => b.score - a.score);
+}
+function roadNameNear(x, y) {
+  const E = S.E; const cx = Math.floor((x - E.bbox[0]) / E.CELL), cy = Math.floor((y - E.bbox[1]) / E.CELL);
+  let best = "", bd = Infinity;
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+    const l = E.segGrid.get((cy + dy) * E.GW + cx + dx); if (!l) continue;
+    for (let i = 0; i < l.length; i += 2) { const e = l[i], j = l[i + 1]; const nm = S.D.names[E.nameI[e]]; if (!nm) continue; const d = segDist(x, y, j); if (d < bd) { bd = d; best = nm; } }
+  }
+  return best;
+}
+function renderTop() {
+  const H = S.heatMeta; const box = $("toplist");
+  const top = H.best.slice(0, 8);
+  box.innerHTML = `<p class="small muted" style="margin:0 0 4px">Now: ${H.mover.name} gives ${pct(H.cur)}. Best spots (click to move the station there):</p>` +
+    top.map((c, i) => `<button data-i="${H.best.indexOf(c)}"><span class="mono">${i + 1}.</span><span>${roadNameNear(c.x, c.y) || "unnamed road"}</span><span class="mono">${pct(c.score)}</span></button>`).join("");
+  box.querySelectorAll("button").forEach(b => b.onclick = () => { const c = H.best[+b.dataset.i]; moveStationTo(H.mover, S.E.VX[c.v], S.E.VY[c.v]); });
+}
+function moveStationTo(st, x, y) { st.x = x; st.y = y; renderStations(); recompute(); }
+function clearHeat() { S.heat = null; if (S.heatMeta) S.heatMeta.id++; $("toplist").innerHTML = ""; $("prog").hidden = true; $("clear-heat").hidden = true; drawLegend(); draw(); }
+
+/* ----- hover ----- */
+function segDist(x, y, j) {
+  const P = S.E.P; const ax = P[j * 2], ay = P[j * 2 + 1], bx = P[j * 2 + 2], by = P[j * 2 + 3];
+  const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy; let t = L2 ? ((x - ax) * dx + (y - ay) * dy) / L2 : 0; t = Math.max(0, Math.min(1, t));
+  return Math.hypot(ax + t * dx - x, ay + t * dy - y);
+}
+function hover(X, Y) {
+  const tip = $("tip"); if (!S.E) return;
+  const [x, y] = s2w(X, Y); const E = S.E;
+  if (S.heat) {
+    const step = S.heatMeta.step; const c = S.heat.find(c => Math.abs(c.x - x) < step * 0.45 && Math.abs(c.y - y) < step * 0.45 && c.score != null);
+    if (c) { tip.hidden = false; tip.innerHTML = `<b>${roadNameNear(c.x, c.y) || "Candidate spot"}</b><br>${pct(c.score)} reached ${fmt(S.heatMeta.thr)} <span class="muted">(now ${pct(S.heatMeta.cur)})</span><br><span class="muted">${c.gain} addresses gained over the other stations alone. Click to move ${S.heatMeta.mover.name} here.</span>`; placeTip(X, Y); return; }
+  }
+  const cx = Math.floor((x - E.bbox[0]) / E.CELL), cy = Math.floor((y - E.bbox[1]) / E.CELL);
+  let best = -1, bj = -1, bd = 14 / S.view.s;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const l = E.segGrid.get((cy + dy) * E.GW + cx + dx); if (!l) continue;
+    for (let i = 0; i < l.length; i += 2) { const d = segDist(x, y, l[i + 1]); if (d < bd) { bd = d; best = l[i]; bj = l[i + 1]; } }
+  }
+  if (best < 0) { tip.hidden = true; return; }
+  const P = E.P; let s = 0; for (let j = E.eoff[best]; j < bj; j++) s += Math.hypot(P[j * 2 + 2] - P[j * 2], P[j * 2 + 3] - P[j * 2 + 1]);
+  const t = timeOnEdge(E, S.dist, best, s);
+  const tu = (E.dir[best] & 1) ? S.dist[E.u[best]] + s / E.spd[best] : Infinity, tv = (E.dir[best] & 2) ? S.dist[E.v[best]] + (E.len[best] - s) / E.spd[best] : Infinity;
+  const st = S.stations[S.org[tu <= tv ? E.u[best] : E.v[best]]];
+  const nm = S.D.names[E.nameI[best]] || S.D.classes[E.cls[best]] + " road";
+  const [r, m] = NORMS[S.norm];
+  const verdict = !isFinite(t) ? "" : t <= r ? `<span style="color:var(--good)">good</span>` : t <= m ? `<span style="color:var(--ok)">sufficient</span>` : `<span style="color:var(--bad)">${r === m ? "too late" : "insufficient"}</span>`;
+  tip.hidden = false;
+  tip.innerHTML = `<b>${nm}</b><br>` + (isFinite(t) && st ? `<span class="mono">${fmt(t)}</span> ${verdict} · from ${st.name}<br><span class="muted mono">${fmt(S.dispatch)} dispatch + ${fmt(turnout(st, snapVertex(st.x, st.y)))} turn-out + ${fmt(t - S.dispatch - turnout(st, snapVertex(st.x, st.y)))} drive</span>` : `<span class="muted">not reachable with these settings</span>`) +
+    `<br><span class="muted">${Math.round(E.len[best] ? speedKmh(S.D.classes[E.cls[best]], E.ms[best]) * S.factor : 0)} km/h assumed</span>`;
+  placeTip(X, Y);
+}
+function placeTip(X, Y) { const tip = $("tip"); const r = cv.getBoundingClientRect(); const w = tip.offsetWidth, h = tip.offsetHeight; tip.style.left = Math.min(r.width - w - 8, X + 14) + "px"; tip.style.top = Math.max(8, Y - h - 10) + "px"; }
+
+/* ----- interaction ----- */
+const pointers = new Map(); let drag = null, pinch = null, moved = false;
+function pinAt(X, Y) {
+  for (let i = S.stations.length - 1; i >= 0; i--) { const st = S.stations[i]; const [px, py] = w2s(st.x, st.y); if (Math.hypot(px - X, py - 16 - Y) < 14 || Math.hypot(px - X, py - Y) < 8) return st; }
+  if (S.anchor && S.homeleg) { const [px, py] = w2s(S.anchor.x, S.anchor.y); if (Math.hypot(px - X, py - Y) < 10) return S.anchor; }
+  return null;
+}
+function local(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+let liveQueued = false;
+function liveRecompute(final) {
+  if (final) { if (drag && drag.target === S.anchor) { computeAnchor(); } renderStations(); recompute(); return; }
+  if (liveQueued) return; liveQueued = true;
+  requestAnimationFrame(() => { liveQueued = false; if (drag && drag.target === S.anchor) computeAnchor(); recompute(); });
+}
+cv.addEventListener("pointerdown", (e) => {
+  cv.setPointerCapture(e.pointerId); const [X, Y] = local(e); pointers.set(e.pointerId, [X, Y]); moved = false;
+  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), s: S.view.s, cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2, view: { ...S.view } }; drag = null; return; }
+  const pin = pinAt(X, Y);
+  drag = pin ? { target: pin, X, Y } : { pan: true, X, Y, tx: S.view.tx, ty: S.view.ty };
+  if (pin && S.heat && pin !== S.anchor) clearHeat();
+  cv.classList.add("dragging");
+});
+cv.addEventListener("pointermove", (e) => {
+  const [X, Y] = local(e);
+  if (!pointers.has(e.pointerId)) { hover(X, Y); return; }
+  pointers.set(e.pointerId, [X, Y]);
+  if (pinch && pointers.size === 2) {
+    const [a, b] = [...pointers.values()]; const d = Math.hypot(a[0] - b[0], a[1] - b[1]); const k = d / pinch.d;
+    const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2; const v = pinch.view;
+    const wx = (pinch.cx - v.tx) / v.s, wy = (pinch.cy - v.ty) / v.s; const s = v.s * k;
+    S.view = { s, tx: cx - wx * s, ty: cy - wy * s }; draw(); return;
+  }
+  if (!drag) return;
+  if (Math.hypot(X - drag.X, Y - drag.Y) > 3) moved = true;
+  if (drag.pan) { S.view.tx = drag.tx + X - drag.X; S.view.ty = drag.ty + Y - drag.Y; $("tip").hidden = true; draw(); }
+  else if (moved) { const [x, y] = s2w(X, Y); drag.target.x = x; drag.target.y = y; liveRecompute(false); }
+});
+function endPointer(e) {
+  const [X, Y] = local(e); pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (drag && !drag.pan && moved) liveRecompute(true);
+  if (drag && drag.pan && !moved && S.heat) {
+    const [x, y] = s2w(X, Y); const step = S.heatMeta.step;
+    const c = S.heat.find(c => Math.abs(c.x - x) < step * 0.45 && Math.abs(c.y - y) < step * 0.45 && c.score != null);
+    if (c) moveStationTo(S.heatMeta.mover, S.E.VX[c.v], S.E.VY[c.v]);
+  }
+  drag = null; cv.classList.remove("dragging");
+}
+cv.addEventListener("pointerup", endPointer); cv.addEventListener("pointercancel", endPointer);
+cv.addEventListener("pointerleave", () => { if (!drag) $("tip").hidden = true; });
+cv.addEventListener("wheel", (e) => { e.preventDefault(); const [X, Y] = local(e); zoomAt(X, Y, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+function zoomAt(X, Y, k) { const v = S.view; const wx = (X - v.tx) / v.s, wy = (Y - v.ty) / v.s; const s = Math.max(0.01, Math.min(3, v.s * k)); S.view = { s, tx: X - wx * s, ty: Y - wy * s }; draw(); }
+$("zin").onclick = () => { const r = cv.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.5); };
+$("zout").onclick = () => { const r = cv.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1 / 1.5); };
+$("zfit").onclick = fit;
+
+/* ----- controls ----- */
+$("sc-now").onclick = () => scenario("now"); $("sc-oost").onclick = () => scenario("oost"); $("sc-west").onclick = () => scenario("west");
+$("add-st").onclick = () => {
+  const r = cv.getBoundingClientRect(); const [x, y] = s2w(r.width / 2, r.height / 2); const [lat, lon] = toLL(x, y);
+  addStation({ name: "New station " + S.nextId, lat, lon }, "vol"); renderStations(); recompute();
+};
+$("norm").onchange = (e) => { S.norm = e.target.value; clearHeat(); recompute(); };
+for (const k of ["time", "norm", "station"]) $("cm-" + k).onclick = () => { S.colorMode = k; ["time", "norm", "station"].forEach(j => $("cm-" + j).setAttribute("aria-pressed", String(j === k))); recompute(); };
+for (const k of ["n", "s", "a"]) $("rg-" + k).onclick = () => { S.region = k; ["n", "s", "a"].forEach(j => $("rg-" + j).setAttribute("aria-pressed", String(j === k))); updateStats(); };
+$("dispatch").onchange = (e) => { S.dispatch = Math.max(0, +e.target.value || 0); clearHeat(); recompute(); };
+function rebuild() { buildGraph(); computeAnchor(); clearHeat(); renderStations(); recompute(); }
+$("speeds").onchange = (e) => { S.speeds = e.target.value; rebuild(); };
+$("factor").oninput = (e) => { $("factor-v").textContent = e.target.value + "%"; };
+$("factor").onchange = (e) => { S.factor = +e.target.value / 100; rebuild(); };
+$("oneway").onchange = (e) => { S.oneway = e.target.checked; rebuild(); };
+$("bus").onchange = (e) => { S.bus = e.target.checked; rebuild(); };
+$("homeleg").onchange = (e) => { S.homeleg = e.target.checked; clearHeat(); renderStations(); recompute(); };
+$("baseline").onclick = () => {
+  S.baseline = { t: Float64Array.from(S.addrT) };
+  $("baseline-l").textContent = "Baseline: " + S.stations.filter(s => s.on && !s.neighbour).map(s => s.name).join(" + ");
+  updateStats();
+};
+$("run").onclick = runSearch;
+$("tiles").onchange = (e) => { S.tiles = e.target.checked; draw(); };
+$("clear-heat").onclick = clearHeat;
+new ResizeObserver(() => { const had = cv.width; resize(); if (!had) fit(); }).observe($("mapwrap"));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (S.paths) { S.pathColors = bucketColors(); drawLegend(); draw(); } });
+
+/* ----- boot ----- */
+async function boot() {
+  let D;
+  try {
+    const r = await fetch("data/amersfoort-graph.json"); if (!r.ok) throw new Error(r.status);
+    D = await r.json();
+  } catch (err) { $("status").textContent = "The road network did not load (" + err.message + "). Reload the page to try again."; return; }
+  prepare(D);
+  if (D.places) for (const [k, p] of Object.entries(D.places)) if (PLACES[k]) Object.assign(PLACES[k], { lat: p[0], lon: p[1] });
+  S.neighbours = (D.neighbours || []).map(n => ({ name: n.name, lat: n.lat, lon: n.lon, turnout: n.turnout }));
+  const [ax, ay] = toXY(PLACES.oost.lat, PLACES.oost.lon); S.anchor = { x: ax, y: ay, anchor: true };
+  buildGraph(); computeAnchor();
+  $("status").hidden = true;
+  fit();
+  scenario("oost");
+  S.baseline = null;
+}
+boot();
+</script>
+</body>
+</html>
